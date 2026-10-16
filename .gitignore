@@ -1,0 +1,16 @@
+.venv/
+.venv-win/
+startup.log
+.dev-deps/
+.dev-tmp/
+.dev-cache/
+__pycache__/
+.pytest_cache/
+/tests/
+*.pyc
+build/
+dist/
+*.spec
+*.mrepair
+!samples/demo.mrepair
+*_export.png
