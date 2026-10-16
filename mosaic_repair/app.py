@@ -9,7 +9,7 @@ import traceback
 import cv2
 import numpy as np
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QAction, QKeySequence, QFont
+from PySide6.QtGui import QAction, QKeySequence, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QListWidget, QListWidgetItem, QComboBox, QSpinBox, QCheckBox,
@@ -26,6 +26,7 @@ from .selections import source_masks, region_contours
 
 IMAGE_FILTER = "图片 (*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff);;所有文件 (*)"
 PROJECT_FILTER = "图片互补工程 (*.mrepair)"
+APP_ICON_PATH = Path(__file__).resolve().parent / "assets" / "app-icon.png"
 MODE_NAMES = [("相似：缩放 / 旋转 / 平移", "similarity"), ("仿射：非等比缩放", "affine"),
               ("透视：四角变换", "perspective")]
 STYLE = """
@@ -98,6 +99,7 @@ class MainWindow(QMainWindow):
         self.preview_timer.setInterval(120)
         self.preview_timer.timeout.connect(self.render_preview)
         self.setWindowTitle("图片互补修补")
+        self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
         self.resize(1480, 900)
         self.setMinimumSize(1080, 700)
         self.setStyleSheet(STYLE)
@@ -138,6 +140,10 @@ class MainWindow(QMainWindow):
         header.setObjectName("header")
         h = QHBoxLayout(header)
         h.setContentsMargins(20, 13, 20, 13)
+        brand_icon = self.label("")
+        brand_icon.setPixmap(self.windowIcon().pixmap(44, 44))
+        brand_icon.setFixedSize(44, 44)
+        h.addWidget(brand_icon)
         brand = QVBoxLayout()
         brand.addWidget(self.label("图片互补", "brand"))
         brand.addWidget(self.label("从补充图取清晰内容，修补模板对应位置", "muted"))
@@ -1122,9 +1128,13 @@ class MainWindow(QMainWindow):
 
 
 def run():
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("MosaicRepair.Desktop")
     app = QApplication(sys.argv)
     app.setApplicationName("图片互补修补")
     app.setOrganizationName("MosaicRepair")
+    app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
     app.setFont(QFont("Microsoft YaHei", 10))
     window = MainWindow()
     window.show()

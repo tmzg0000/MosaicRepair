@@ -1,5 +1,6 @@
 """Build on the target OS; copy the resulting directory as a portable application."""
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import sys
@@ -7,6 +8,8 @@ import sys
 root = Path(__file__).resolve().parents[1]
 command = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--windowed",
            "--name", "MosaicRepair", "--copy-metadata", "PySide6-Essentials", "--copy-metadata", "shiboken6",
+           "--icon", str(root / "mosaic_repair" / "assets" / "app-icon.ico"),
+           "--add-data", f"{root / 'mosaic_repair' / 'assets' / 'app-icon.png'}{os.pathsep}mosaic_repair/assets",
            str(root / "main.py")]
 subprocess.run(command, cwd=root, check=True)
 output = root / "dist" / "MosaicRepair"
