@@ -19,10 +19,12 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
       - run: python tools/build.py
+      - name: Verify embedded Windows executable icon
+        run: python tools/verify_windows_icon.py dist/MosaicRepair/MosaicRepair.exe
       - run: python -c "import subprocess; subprocess.run(['dist/MosaicRepair/MosaicRepair.exe', '--smoke-test'], check=True, timeout=30)"
         env:
           QT_QPA_PLATFORM: offscreen
       - uses: actions/upload-artifact@v4
         with:
-          name: MosaicRepair-Windows-x64
+          name: MosaicRepair-Windows-x64-${{ github.sha }}
           path: dist/MosaicRepair

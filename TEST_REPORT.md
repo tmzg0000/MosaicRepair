@@ -1,5 +1,13 @@
 # v0.2 验证记录
 
+## EXE 图标修复验证（2026-10-16）
+
+- 本地旧的 `MosaicRepair-source.zip` 和 `MosaicRepair-v0.2.0-source.zip` 均不包含 ICO / PNG 图标，内部构建脚本也没有 `--icon`。使用这些旧包构建会保留 PyInstaller 默认图标。
+- 最新源码构建前检查 ICO 完整性，Windows 构建后逐尺寸、逐字节比对 EXE 内嵌图标；不一致时停止构建，不生成成功报告。
+- 成功的 Windows 构建生成 `build-info.json`，记录 EXE / ICO 的 SHA-256 和验证过的尺寸，并通知系统刷新图标缓存。GitHub Actions 上传前再次独立验证 EXE 图标。
+- Linux 本地复测：**47 项通过，2 项 Windows 专属测试跳过，耗时约 21.7 秒**。覆盖缺失尺寸、错误图像字节、截断 ICO，以及既有功能与启动流程。
+- Windows 专属回归用 PyInstaller 原始启动器确认默认图标会被拒绝，写入自定义图标后才可通过；本地无法执行，实际构建产物还需 Windows CI 验证。
+
 ## 验证环境
 
 - Linux x86_64，Python 3.12.14。

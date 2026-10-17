@@ -33,6 +33,8 @@
 dist/
   MosaicRepair/
     MosaicRepair.exe
+    MosaicRepair.ico
+    build-info.json
     _internal/
     samples/
     third_party_licenses/
@@ -46,6 +48,8 @@ dist/
 当前开发验证环境是 Linux；项目中的 Windows 打包脚本与 CI 配置尚需在 Windows 上实际执行。Linux 打包文件不能当作 Windows EXE。PyInstaller 使用方式见[官方文档](https://pyinstaller.org/en/stable/operating-mode.html)。
 
 程序图标使用绿色双层照片与互补像素，已接入窗口和界面页头。Windows 打包时自动嵌入多尺寸图标；[透明 PNG 原稿](mosaic_repair/assets/app-icon.png)、[Windows ICO](mosaic_repair/assets/app-icon.ico)及[设计说明](mosaic_repair/assets/README.md)保存在源码中。现有便携版需要重新打包才能更新 EXE 图标。
+
+如果 EXE 仍显示 Python 和软盘的默认图标，先确认源码中存在 `mosaic_repair/assets/app-icon.ico`，并用最新的 `build_windows.bat` 构建；早期源码 ZIP 不包含图标。新版构建会逐尺寸、逐字节检查 EXE 实际嵌入的图标，检查失败即停止，成功后在输出目录生成 `build-info.json` 并通知 Windows 刷新图标。也可运行 `python tools/verify_windows_icon.py dist/MosaicRepair/MosaicRepair.exe` 独立检查。检查通过但资源管理器仍显示旧图标时，把整个输出文件夹复制到一个新路径再查看，以避开旧路径的图标缓存。
 
 ## 实际操作
 
