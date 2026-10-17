@@ -45,7 +45,7 @@ dist/
 
 也提供 `.github/workflows/build-windows.yml`，在 GitHub Actions 手动触发或推送 `v*` 标签可构建 Windows 便携包，构建前后分别执行源码和打包程序启动检查。`tests/` 按项目要求仅在本地保留，不上传 Git。
 
-当前开发验证环境是 Linux；项目中的 Windows 打包脚本与 CI 配置尚需在 Windows 上实际执行。Linux 打包文件不能当作 Windows EXE。PyInstaller 使用方式见[官方文档](https://pyinstaller.org/en/stable/operating-mode.html)。
+本地开发环境是 Linux；Windows Server 2022 CI 已完成 Windows EXE 构建、内嵌图标校验及程序启动检查，Windows 10 实机仍需验证。Linux 打包文件不能当作 Windows EXE。PyInstaller 使用方式见[官方文档](https://pyinstaller.org/en/stable/operating-mode.html)。
 
 程序图标使用绿色双层照片与互补像素，已接入窗口和界面页头。Windows 打包时自动嵌入多尺寸图标；[透明 PNG 原稿](mosaic_repair/assets/app-icon.png)、[Windows ICO](mosaic_repair/assets/app-icon.ico)及[设计说明](mosaic_repair/assets/README.md)保存在源码中。现有便携版需要重新打包才能更新 EXE 图标。
 

@@ -6,7 +6,8 @@
 - 最新源码构建前检查 ICO 完整性，Windows 构建后逐尺寸、逐字节比对 EXE 内嵌图标；不一致时停止构建，不生成成功报告。
 - 成功的 Windows 构建生成 `build-info.json`，记录 EXE / ICO 的 SHA-256 和验证过的尺寸，并通知系统刷新图标缓存。GitHub Actions 上传前再次独立验证 EXE 图标。
 - Linux 本地复测：**47 项通过，2 项 Windows 专属测试跳过，耗时约 21.7 秒**。覆盖缺失尺寸、错误图像字节、截断 ICO，以及既有功能与启动流程。
-- Windows 专属回归用 PyInstaller 原始启动器确认默认图标会被拒绝，写入自定义图标后才可通过；本地无法执行，实际构建产物还需 Windows CI 验证。
+- Windows 专属回归用 PyInstaller 原始启动器确认默认图标会被拒绝，写入自定义图标后才可通过；该本地测试在 Linux 跳过。
+- **[Windows CI 实际构建验证通过](https://github.com/tmzg0000/MosaicRepair/actions/runs/39000993173)**：Windows Server 2022 / Python 3.12 成功生成 EXE，构建内检查与独立检查均确认其 9 个尺寸的图标资源与新 ICO 逐字节一致，打包程序启动检查通过，构建包已上传。对应代码提交 `c492ebf`。
 
 ## 验证环境
 
@@ -54,9 +55,9 @@
 
 导出目录更新：新增模板原始路径记录，导出默认定位模板目录并使用“模板名_修补.jpg”；工程重开后保留该路径。相关 GUI 导出与工程持久化的 6 项测试通过（约 5.5 秒），另检查了旧工程路径兼容与模板路径未知时不会误用补充图目录。
 
-- **Windows 10 实机运行、Windows EXE 构建与运行尚未验证。** 当前环境为 Linux，没有生成 Windows EXE。
+- **Windows 10 实机运行尚未验证。** Windows EXE 构建、内嵌图标与启动检查已在 Windows Server 2022 CI 验证通过，详见本文顶部记录。
 - 新增真实 `cmd.exe` 启动测试，覆盖含中文与空格的目录；当前在 Linux 跳过，Windows CI 会执行。用户报告的“黑窗无输出”尚未拿到现场日志，不能认定实际原因已排除。
-- Windows 构建脚本已配置：安装依赖 → 运行测试 → PyInstaller 打包；GitHub Actions 还会执行打包产物启动检查，但此工作流尚未实际运行。
+- Windows 构建脚本已配置：安装依赖 → 运行测试（Git 不含本地 tests 目录时执行源码启动检查）→ PyInstaller 打包 → 校验 EXE 内嵌图标；GitHub Actions 独立图标校验与打包产物启动检查已实际运行通过。
 - 本机额外尝试的 Linux 打包检查因环境缺少 `objdump` 停止，未完成 Linux 打包；这不构成 Windows 打包验证。
 - 尚未做大量高分辨率图片的内存压力测试、不同显示缩放比例和 Windows 输入设备实机测试。
 
