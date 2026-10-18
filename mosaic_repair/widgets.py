@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 import numpy as np
-from PySide6.QtCore import Qt, QRectF, QPointF, Signal
+from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QEvent
 from PySide6.QtGui import QColor, QImage, QPixmap, QPen, QBrush, QPainter, QPolygonF, QPainterPath
 from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsItem, QLabel, QSizePolicy
 
@@ -33,6 +33,7 @@ class ImageCanvas(QGraphicsView):
     point_picked = Signal(object)
     region_picked = Signal(int)
     shape_drawn = Signal(object)
+    wand_picked = Signal(object)
     files_dropped = Signal(object)
 
     def __init__(self, parent=None):
@@ -57,9 +58,67 @@ class ImageCanvas(QGraphicsView):
         self.pan_start = None
         self.auto_fit = True
         self.brush_size = 24
+        self.hover_position = None
         self.stroke = []
         self.polygon_points = []
         self.empty_text = "拖入图片，或使用顶部按钮打开"
+        self.horizontalScrollBar().valueChanged.connect(self.update_brush_cursor)
+        self.verticalScrollBar().valueChanged.connect(self.update_brush_cursor)
+
+    def set_brush_size(self, size):
+        self.brush_size = size
+        self.update_brush_cursor()
+
+    def brush_cursor_rect(self):
+        if (self.hover_position is None or self.mode not in ("brush","eraser")
+                or self.pan_start is not None or not self.isEnabled()):
+            return None
+        center = self.mapToScene(self.hover_position)
+        if not self.image_bounds.contains(center):
+            return None
+        radius = self.brush_size / 2.0
+        return QRectF(center.x()-radius,center.y()-radius,self.brush_size,self.brush_size)
+
+    def update_brush_cursor(self, *args):
+        if self.pan_start is not None:
+            shape = Qt.CursorShape.ClosedHandCursor
+        elif self.brush_cursor_rect() is not None:
+            shape = Qt.CursorShape.BlankCursor
+        elif self.mode in ("select","crop","point","brush","eraser","polygon","wand"):
+            shape = Qt.CursorShape.CrossCursor
+        else:
+            shape = Qt.CursorShape.OpenHandCursor
+        self.setCursor(shape)
+        self.viewport().update()
+
+    def viewportEvent(self, event):
+        if event.type()==QEvent.Type.Leave:
+            self.hover_position = None
+            self.update_brush_cursor()
+        elif event.type()==QEvent.Type.Enter:
+            self.hover_position = event.position().toPoint()
+            self.update_brush_cursor()
+        return super().viewportEvent(event)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type()==QEvent.Type.EnabledChange and hasattr(self,"hover_position"):
+            self.update_brush_cursor()
+
+    def drawForeground(self, painter, rect):
+        super().drawForeground(painter,rect)
+        footprint = self.brush_cursor_rect()
+        if footprint is None:
+            return
+        painter.save()
+        painter.setClipRect(self.image_bounds,Qt.ClipOperation.IntersectClip)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        # Two contrasting outlines remain visible on both light and dark pixels.
+        painter.setPen(self._pen("#18222c",3))
+        painter.drawEllipse(footprint)
+        painter.setPen(self._pen("#ffffff",1))
+        painter.drawEllipse(footprint)
+        painter.restore()
 
     @staticmethod
     def dropped_paths(mime):
@@ -93,7 +152,7 @@ class ImageCanvas(QGraphicsView):
             self.overlays.clear()
             self.temp_items.clear()
             self.image_bounds = QRectF()
-            self.viewport().update()
+            self.update_brush_cursor()
             return
         h, w = image.shape[:2]
         x, y, rw, rh = bounds or (0, 0, w, h)
@@ -111,21 +170,23 @@ class ImageCanvas(QGraphicsView):
         self.setSceneRect(self.image_bounds)
         if fit or old_bounds != self.image_bounds:
             self.fit_image()
+        self.update_brush_cursor()
 
     def set_mode(self, mode):
         self.cancel_drawing()
         self.mode = mode
-        self.setCursor(Qt.CursorShape.CrossCursor if mode in ("select", "crop", "point","brush","eraser","polygon")
-                       else Qt.CursorShape.OpenHandCursor)
+        self.update_brush_cursor()
 
     def fit_image(self):
         if not self.image_bounds.isEmpty():
             self.fitInView(self.image_bounds.adjusted(-4, -4, 4, 4), Qt.AspectRatioMode.KeepAspectRatio)
         self.auto_fit = True
+        self.update_brush_cursor()
 
     def actual_size(self):
         self.resetTransform()
         self.auto_fit = False
+        self.update_brush_cursor()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -140,6 +201,7 @@ class ImageCanvas(QGraphicsView):
         if 0.01 <= current * factor <= 80:
             self.scale(factor, factor)
             self.auto_fit = False
+        self.update_brush_cursor()
         event.accept()
 
     def _point(self, event):
@@ -148,6 +210,8 @@ class ImageCanvas(QGraphicsView):
         return QPointF(min(max(p.x(), b.left()), b.right()), min(max(p.y(), b.top()), b.bottom()))
 
     def mousePressEvent(self, event):
+        self.hover_position = event.position().toPoint()
+        self.update_brush_cursor()
         if event.button()==Qt.MouseButton.RightButton and self.mode=="polygon":
             if self.polygon_points:
                 self.polygon_points.pop()
@@ -156,7 +220,7 @@ class ImageCanvas(QGraphicsView):
             return
         if event.button() == Qt.MouseButton.MiddleButton or (event.button() == Qt.MouseButton.LeftButton and self.mode == "pan"):
             self.pan_start = event.position().toPoint()
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self.update_brush_cursor()
             event.accept()
             return
         if event.button() != Qt.MouseButton.LeftButton or self.image_bounds.isEmpty():
@@ -166,6 +230,8 @@ class ImageCanvas(QGraphicsView):
             return
         if self.mode == "point":
             self.point_picked.emit((p.x(), p.y()))
+        elif self.mode == "wand":
+            self.wand_picked.emit((p.x(), p.y()))
         elif self.mode in ("brush","eraser"):
             self.start = self._point(event)
             self.stroke = [(self.start.x(),self.start.y())]
@@ -179,6 +245,8 @@ class ImageCanvas(QGraphicsView):
         event.accept()
 
     def mouseMoveEvent(self, event):
+        self.hover_position = event.position().toPoint()
+        self.update_brush_cursor()
         if self.pan_start is not None:
             point = event.position().toPoint()
             delta = point - self.pan_start

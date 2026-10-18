@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace, asdict
 from io import BytesIO
 from pathlib import Path, PureWindowsPath
+import base64
 import json
 import zipfile
 
@@ -11,8 +12,10 @@ import numpy as np
 
 from .core import MODES, RepairError, atomic_write, png_bytes, read_image, validate_matrix
 from .colors import ColorSettings, ColorTransform
+from .selections import read_region_mask
 
 MAX_TOTAL_PIXELS = 100_000_000
+MAX_MANIFEST_BYTES = 16_000_000
 
 
 @dataclass
@@ -23,6 +26,17 @@ class Region:
     kind: str = "rectangle"
     points: tuple = ()
     brush_size: int = 20
+    mask_png: str = ""
+
+    @classmethod
+    def from_mask(cls, mask):
+        import cv2
+        mask = np.uint8(mask > 0) * 255
+        x,y,w,h = cv2.boundingRect(mask)
+        if w == 0 or h == 0:
+            raise RepairError("魔法棒未选中任何像素。")
+        encoded = base64.b64encode(png_bytes(mask[y:y+h,x:x+w])).decode("ascii")
+        return cls((x,y,w,h), space="template", kind="wand", mask_png=encoded)
 
     @classmethod
     def from_shape(cls,kind,points,shape,brush_size=20):
@@ -90,7 +104,8 @@ class Document:
 
 
 def save_project(path, document: Document):
-    manifest = {"version": 2, "base_name": document.base_name, "feather": document.feather,
+    version = 3 if any(r.kind=="wand" for s in document.sources for r in s.regions) else 2
+    manifest = {"version": version, "base_name": document.base_name, "feather": document.feather,
                 "base_path": document.base_path, "original_paths": document.original_paths, "sources": []}
     output = BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
@@ -103,7 +118,10 @@ def save_project(path, document: Document):
                 "mode": source.mode, "message": source.message, "enabled": source.enabled, "crop": source.crop,
                 "regions": [asdict(r) for r in source.regions], "color": asdict(source.color),
                 "source_points": source.source_points, "target_points": source.target_points})
-        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, allow_nan=False))
+        parameters = json.dumps(manifest, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        if len(parameters)>MAX_MANIFEST_BYTES:
+            raise RepairError("工程选区数据过多，请删除部分选区后再保存。")
+        archive.writestr("manifest.json", parameters)
     atomic_write(path, output.getvalue())
 
 
@@ -115,10 +133,10 @@ def load_project(path) -> Document:
                 raise RepairError("工程文件过大，无法安全打开。")
             if len({i.filename for i in entries}) != len(entries):
                 raise RepairError("工程包含重复文件。")
-            if archive.getinfo("manifest.json").file_size > 16_000_000:
+            if archive.getinfo("manifest.json").file_size > MAX_MANIFEST_BYTES:
                 raise RepairError("工程参数过大。")
             data = json.loads(archive.read("manifest.json"))
-            if data["version"] not in (1,2):
+            if data["version"] not in (1,2,3):
                 raise RepairError("不支持这个工程版本。")
             sources = data["sources"]
             if not isinstance(sources, list) or len(sources) > 99:
@@ -173,8 +191,10 @@ def load_project(path) -> Document:
                         raise RepairError("工程选框坐标无效。")
                     space = region.get("space","source")
                     kind = region.get("kind","rectangle")
-                    if space not in ("source","template") or kind not in ("rectangle","polygon","brush","eraser"):
+                    if space not in ("source","template") or kind not in ("rectangle","polygon","brush","eraser","wand"):
                         raise RepairError("工程选区类型无效。")
+                    if kind=="wand" and (data["version"]<3 or space!="template"):
+                        raise RepairError("工程魔法棒选区版本或坐标空间无效。")
                     gh,gw = base.shape[:2] if space=="template" else image.shape[:2]
                     x, y, rw, rh = rect
                     if x < 0 or y < 0 or rw < 1 or rh < 1 or x + rw > gw or y + rh > gh:
@@ -184,7 +204,7 @@ def load_project(path) -> Document:
                         raise RepairError("工程画笔大小无效。")
                     points = region.get("points",[])
                     values = ()
-                    if kind!="rectangle":
+                    if kind not in ("rectangle","wand"):
                         pts = np.asarray(points,dtype=float)
                         if (pts.ndim!=2 or pts.shape[1]!=2 or not (3 if kind=="polygon" else 1)<=len(pts)<=4096
                                 or not np.isfinite(pts).all() or (pts<0).any()
@@ -194,7 +214,13 @@ def load_project(path) -> Document:
                         calculated = Region.from_shape(kind,values,(gh,gw),width)
                         if tuple(rect)!=calculated.rect:
                             raise RepairError("工程自由选区边界与轮廓不一致。")
-                    source.regions.append(Region(tuple(rect),bool(region["enabled"]),space,kind,values,width))
+                    selection = Region(tuple(rect),bool(region["enabled"]),space,kind,values,width)
+                    if kind=="wand":
+                        selection.mask_png = region.get("mask_png")
+                        if not isinstance(selection.mask_png,str):
+                            raise RepairError("工程魔法棒选区数据无效。")
+                        read_region_mask(selection)
+                    source.regions.append(selection)
                 for key, shape in (("source_points", image.shape), ("target_points", base.shape)):
                     points = np.asarray(item.get(key, []), dtype=float)
                     if points.size == 0:

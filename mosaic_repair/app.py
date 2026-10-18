@@ -8,13 +8,13 @@ import traceback
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSettings
 from PySide6.QtGui import QAction, QKeySequence, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QListWidget, QListWidgetItem, QComboBox, QSpinBox, QCheckBox,
     QDoubleSpinBox, QSplitter, QFileDialog, QMessageBox, QProgressBar, QFrame,
-    QAbstractItemView, QGroupBox, QScrollArea, QLayout,
+    QAbstractItemView, QGroupBox, QScrollArea, QLayout, QSizePolicy,
 )
 
 from .core import (RepairError, MODES, read_image, auto_align, manual_align,
@@ -22,7 +22,7 @@ from .core import (RepairError, MODES, read_image, auto_align, manual_align,
 from .model import Document, Source, Region, save_project, load_project
 from .widgets import ImageCanvas, ElidedLabel
 from .colors import ColorSettings, estimate_color_transform, adjust_image
-from .selections import source_masks, region_contours
+from .selections import source_masks, region_contours, magic_wand_mask
 
 IMAGE_FILTER = "图片 (*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff);;所有文件 (*)"
 PROJECT_FILTER = "图片互补工程 (*.mrepair)"
@@ -74,8 +74,11 @@ class Job(QThread):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, settings=None):
         super().__init__()
+        self.settings = settings if settings is not None else QSettings("MosaicRepair", "MosaicRepair")
+        self.tool_sizes = {mode:self.read_tool_setting(f"tools/{mode}_size",24,1,500)
+                           for mode in ("brush","eraser")}
         self.document = None
         self.project_path = None
         self.dirty = False
@@ -113,6 +116,23 @@ class MainWindow(QMainWindow):
             return self.document.sources[self.active_index]
         return None
 
+    def read_tool_setting(self, key, default, minimum, maximum):
+        try:
+            value = int(self.settings.value(key,default))
+            return value if minimum<=value<=maximum else default
+        except (TypeError,ValueError,OverflowError):
+            return default
+
+    def save_tool_setting(self, key, value):
+        self.settings.setValue(key,value)
+        self.settings.sync()
+
+    def change_brush_size(self, value):
+        if self.selection_mode in self.tool_sizes:
+            self.tool_sizes[self.selection_mode] = value
+            self.result_canvas.set_brush_size(value)
+            self.save_tool_setting(f"tools/{self.selection_mode}_size",value)
+
     @staticmethod
     def label(text, name=None, wrap=False):
         result = QLabel(text)
@@ -144,11 +164,20 @@ class MainWindow(QMainWindow):
         brand_icon.setPixmap(self.windowIcon().pixmap(44, 44))
         brand_icon.setFixedSize(44, 44)
         h.addWidget(brand_icon)
-        brand = QVBoxLayout()
-        brand.addWidget(self.label("图片互补", "brand"))
-        brand.addWidget(self.label("从补充图取清晰内容，修补模板对应位置", "muted"))
-        h.addLayout(brand)
-        h.addStretch()
+        self.brand_area = QWidget()
+        brand = QVBoxLayout(self.brand_area)
+        brand.setContentsMargins(0,0,0,0)
+        brand.setSpacing(3)
+        title_row = QHBoxLayout()
+        title_row.addWidget(self.label("图片互补", "brand"))
+        subtitle = self.label("从补充图取清晰内容，修补模板对应位置", "muted", True)
+        subtitle.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Preferred)
+        title_row.addWidget(subtitle,1)
+        brand.addLayout(title_row)
+        self.workflow = self.label("拖入模板和补充图 → 裁切 / 对齐 → 自动匹配颜色 → 在左侧模板涂抹或圈选 → 导出 JPEG", "muted", True)
+        self.workflow.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Preferred)
+        brand.addWidget(self.workflow)
+        h.addWidget(self.brand_area,1)
         self.open_button = self.button("打开模板", self.open_base)
         self.add_button = self.button("＋ 添加补充图", self.add_sources)
         self.load_button = self.button("打开工程", self.open_project)
@@ -160,9 +189,6 @@ class MainWindow(QMainWindow):
                        self.undo_button, self.redo_button, self.export_button):
             h.addWidget(button)
         root.addWidget(header)
-        workflow = self.label("  拖入模板和补充图  →  裁切 / 对齐  →  自动匹配颜色  →  在左侧模板涂抹或圈选  →  导出 JPEG", "muted")
-        workflow.setContentsMargins(17, 12, 10, 12)
-        root.addWidget(workflow)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
@@ -346,22 +372,40 @@ class MainWindow(QMainWindow):
         result_layout.addLayout(row)
         row = QHBoxLayout()
         self.selection_buttons = {}
-        for mode,name in (("brush","涂抹"),("polygon","多边形"),("select","矩形"),("eraser","橡皮")):
+        for mode,name in (("wand","魔术棒"),("select","矩形"),("polygon","多边形"),("brush","涂抹"),("eraser","橡皮")):
             button = self.button(name,lambda checked=False,m=mode:self.set_tool(m))
             button.setCheckable(True)
             row.addWidget(button)
             self.selection_buttons[mode] = button
         self.select_tool = self.selection_buttons["select"]
+        self.selection_buttons["wand"].setToolTip("点击模板，添加颜色相近的连通区域；按原始模板取色。")
         result_layout.addLayout(row)
         row = QHBoxLayout()
-        row.addWidget(self.label("画笔直径"))
+        self.brush_controls = QWidget()
+        brush_row = QHBoxLayout(self.brush_controls)
+        brush_row.setContentsMargins(0,0,0,0)
+        self.brush_size_label = self.label("画笔直径")
+        brush_row.addWidget(self.brush_size_label)
         self.brush_spin = QSpinBox()
         self.brush_spin.setRange(1,500)
-        self.brush_spin.setValue(24)
+        self.brush_spin.setValue(self.tool_sizes["brush"])
         self.brush_spin.setSuffix(" px")
-        self.brush_spin.valueChanged.connect(lambda value:setattr(self.result_canvas,"brush_size",value))
-        row.addWidget(self.brush_spin)
-        row.addWidget(self.label("多边形：单击加点，双击或 Enter 完成","muted"),1)
+        self.brush_spin.valueChanged.connect(self.change_brush_size)
+        brush_row.addWidget(self.brush_spin)
+        row.addWidget(self.brush_controls)
+        self.wand_controls = QWidget()
+        wand_row = QHBoxLayout(self.wand_controls)
+        wand_row.setContentsMargins(0,0,0,0)
+        wand_row.addWidget(self.label("颜色容差"))
+        self.wand_tolerance_spin = QSpinBox()
+        self.wand_tolerance_spin.setRange(0,255)
+        self.wand_tolerance_spin.setValue(self.read_tool_setting("tools/wand_tolerance",32,0,255))
+        self.wand_tolerance_spin.valueChanged.connect(lambda value:self.save_tool_setting("tools/wand_tolerance",value))
+        self.wand_tolerance_spin.setToolTip("0 仅选相同颜色；数值越大，允许的颜色差异越大。调整后再次点击取选区。")
+        wand_row.addWidget(self.wand_tolerance_spin)
+        row.addWidget(self.wand_controls)
+        self.tool_help = self.label("", "muted", True)
+        row.addWidget(self.tool_help,1)
         result_layout.addLayout(row)
         self.result_hint = self.label("先对齐补充图，再框选清晰区域。", "hint", True)
         result_layout.addWidget(self.result_hint)
@@ -369,6 +413,7 @@ class MainWindow(QMainWindow):
         self.result_canvas.point_picked.connect(self.pick_target_point)
         self.result_canvas.rectangle_drawn.connect(self.add_template_rectangle)
         self.result_canvas.shape_drawn.connect(self.add_template_shape)
+        self.result_canvas.wand_picked.connect(self.add_wand_selection)
         self.result_canvas.files_dropped.connect(self.drop_template)
         self.result_canvas.empty_text = "将模板图片拖到这里"
         result_layout.addWidget(self.result_canvas, 1)
@@ -743,6 +788,18 @@ class MainWindow(QMainWindow):
         except RepairError as exc:
             self.notice(exc)
 
+    def add_wand_selection(self,point):
+        if self.job or not self.source or self.source.matrix is None:
+            return
+        if len(self.source.regions)>=1000:
+            self.notice("每张补充图最多保存 1000 个选区或笔画。")
+            return
+        base = self.document.base
+        tolerance = self.wand_tolerance_spin.value()
+        self.start_task("正在选择颜色相近的连通区域…",
+                        lambda: Region.from_mask(magic_wand_mask(base,point,tolerance)),
+                        self.commit_template_region)
+
     def commit_template_region(self,region):
         if self.job or not self.source or self.source.matrix is None:
             self.notice("请先将当前补充图对齐到模板，再在模板上选择修补区域。")
@@ -888,7 +945,7 @@ class MainWindow(QMainWindow):
             x, y, w, h = region.rect
             intersects = region.space=="template" or not (x+w <= source.bounds[0] or y+h <= source.bounds[1] or
                          x >= source.bounds[0]+source.bounds[2] or y >= source.bounds[1]+source.bounds[3])
-            name = {"rectangle":"矩形","polygon":"多边形","brush":"涂抹","eraser":"橡皮"}[region.kind]
+            name = {"rectangle":"矩形","polygon":"多边形","brush":"涂抹","eraser":"橡皮","wand":"魔术棒"}[region.kind]
             item = QListWidgetItem(f"{index+1}. {name} · {w} × {h}" + (" · 裁切外" if not intersects else ""))
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked if region.enabled else Qt.CheckState.Unchecked)
@@ -943,7 +1000,20 @@ class MainWindow(QMainWindow):
         for mode,button in self.selection_buttons.items():
             button.setChecked(mode==self.selection_mode and can_select)
             button.setEnabled(can_select)
+        self.brush_controls.setVisible(self.selection_mode in ("brush","eraser"))
         self.brush_spin.setEnabled(can_select)
+        size_mode = self.selection_mode if self.selection_mode in self.tool_sizes else "brush"
+        self.brush_size_label.setText("橡皮直径" if size_mode=="eraser" else "画笔直径")
+        self.brush_spin.blockSignals(True)
+        self.brush_spin.setValue(self.tool_sizes[size_mode])
+        self.brush_spin.blockSignals(False)
+        self.result_canvas.set_brush_size(self.tool_sizes[size_mode])
+        self.wand_controls.setVisible(self.selection_mode=="wand")
+        self.wand_tolerance_spin.setEnabled(can_select)
+        help_text = {"brush":"按住左键涂抹，添加修补范围。", "eraser":"按住左键擦除，减少修补范围。",
+                     "wand":"单击添加连通选区；容差越大，颜色范围越宽。",
+                     "polygon":"单击加点，双击或 Enter 完成。", "select":"按住左键拖出矩形。"}
+        self.tool_help.setText(help_text[self.selection_mode])
         self.crop_tool.setChecked(is_crop)
         self.result_canvas.set_mode("point" if self.manual else (self.selection_mode if can_select else "pan"))
         self.preview_combo.setEnabled(not self.manual)
@@ -969,6 +1039,8 @@ class MainWindow(QMainWindow):
             self.result_hint.setText("手动校准：在中间补充图点一下 → 左侧原模板对应位置点一下，重复后应用校准。")
         elif source and source.matrix is None:
             self.result_hint.setText("当前补充图尚未对齐；可先裁切，再自动对齐或手动校准。")
+        elif can_select and self.selection_mode=="wand":
+            self.result_hint.setText("魔术棒按原始模板取色：点击选中相近颜色的连通区域，可重复点击添加；用橡皮修边，Ctrl+Z 撤销。")
         elif self.preview_combo.currentIndex() == 2:
             self.result_hint.setText("对齐检查：当前补充图以 50% 透明度叠加；重影明显时请校准或微调。")
         else:
