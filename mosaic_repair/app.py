@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QListWidget, QListWidgetItem, QComboBox, QSpinBox, QCheckBox,
     QDoubleSpinBox, QSplitter, QFileDialog, QMessageBox, QProgressBar, QFrame,
-    QAbstractItemView, QGroupBox, QScrollArea, QLayout, QSizePolicy,
+    QAbstractItemView, QGroupBox, QScrollArea, QLayout, QSizePolicy, QGridLayout,
 )
 
 from .core import (RepairError, MODES, read_image, auto_align, manual_align,
@@ -305,12 +305,18 @@ class MainWindow(QMainWindow):
         self.side_scroll.setWidget(sidebar)
         self.side_scroll.setMinimumWidth(275)
         self.side_scroll.setMaximumWidth(345)
-        self.splitter.addWidget(self.side_scroll)
-
+        self.image_workspace = QFrame()
+        self.image_workspace.setObjectName("panel")
+        images = QGridLayout(self.image_workspace)
+        images.setContentsMargins(10,12,10,10)
+        images.setHorizontalSpacing(12)
+        images.setVerticalSpacing(6)
+        images.setColumnStretch(0,1)
+        images.setColumnStretch(1,1)
+        images.setRowStretch(2,1)
         self.source_panel = QFrame()
-        self.source_panel.setObjectName("panel")
         source_layout = QVBoxLayout(self.source_panel)
-        source_layout.setContentsMargins(10, 12, 10, 10)
+        source_layout.setContentsMargins(0,0,0,0)
         source_layout.addWidget(self.label("02   补充图：裁切 / 校准 / 调色预览", "step"))
         self.source_title = ElidedLabel("请添加补充图")
         self.source_title.setObjectName("panelTitle")
@@ -319,6 +325,7 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         self.crop_tool = self.button("裁切图片", lambda: self.set_tool("crop"))
         self.crop_tool.setCheckable(True)
+        self.crop_tool.setToolTip("在补充图上拖出需要保留的范围，再点击应用裁切；不直接添加修补选区。")
         self.reset_crop_button = self.button("恢复完整图片", self.reset_crop)
         for button in (self.crop_tool, self.reset_crop_button):
             row.addWidget(button)
@@ -327,34 +334,35 @@ class MainWindow(QMainWindow):
         row.addWidget(self.source_original)
         row.addStretch()
         source_layout.addLayout(row)
-        row = QHBoxLayout()
+        self.color_tools = QWidget()
+        self.color_tools.setToolTip("自动匹配补充图颜色，或点击颜色微调打开右侧设置。")
+        row = QHBoxLayout(self.color_tools)
+        row.setContentsMargins(0,0,0,0)
         self.quick_match_button = self.button("自动匹配颜色",self.match_colors,True)
+        self.quick_match_button.setToolTip("对齐后匹配补充图的亮度、对比度、饱和度和偏色。")
         row.addWidget(self.quick_match_button)
         row.addWidget(self.button("颜色微调",lambda:self.side_scroll.ensureWidgetVisible(self.color_group)))
-        row.addWidget(self.label("亮度 / 对比度 / 饱和度","muted"),1)
-        source_layout.addLayout(row)
         self.crop_tools = QWidget()
         crop_row = QHBoxLayout(self.crop_tools)
         crop_row.setContentsMargins(0, 0, 0, 0)
         self.apply_crop_button = self.button("应用裁切", self.apply_crop, True)
         crop_row.addWidget(self.apply_crop_button)
         crop_row.addWidget(self.button("取消", lambda: self.set_tool(self.selection_mode)))
-        crop_row.addWidget(self.label("拖出需要保留的范围", "muted"))
-        source_layout.addWidget(self.crop_tools)
+        self.crop_tools.setToolTip("在补充图上拖出需要保留的范围，再点击应用裁切。")
         self.source_canvas = ImageCanvas()
         self.source_canvas.rectangle_drawn.connect(self.add_rectangle)
         self.source_canvas.files_dropped.connect(self.add_source_paths)
         self.source_canvas.empty_text = "将一张或多张补充图拖到这里"
         self.source_canvas.point_picked.connect(self.pick_source_point)
         self.source_canvas.region_picked.connect(lambda i: self.region_list.setCurrentRow(i))
-        source_layout.addWidget(self.source_canvas, 1)
-        source_layout.addLayout(self.canvas_footer(self.source_canvas, "与模板同步显示选区 · 勾选原图可对比颜色"))
-        self.splitter.addWidget(self.source_panel)
+        source_layout.addStretch()
+        images.addWidget(self.source_panel,0,1)
+        images.addWidget(self.source_canvas,2,1)
+        images.addLayout(self.canvas_footer(self.source_canvas, "与模板同步显示选区 · 勾选原图可对比颜色"),3,1)
 
         result_panel = QFrame()
-        result_panel.setObjectName("panel")
         result_layout = QVBoxLayout(result_panel)
-        result_layout.setContentsMargins(10, 12, 10, 10)
+        result_layout.setContentsMargins(0,0,0,0)
         result_layout.addWidget(self.label("01 / 03   模板：绘制修补选区与结果预览", "step"))
         self.base_title = ElidedLabel("请先打开模板")
         self.base_title.setObjectName("panelTitle")
@@ -370,17 +378,26 @@ class MainWindow(QMainWindow):
         self.show_guides.toggled.connect(self.update_guides)
         row.addWidget(self.show_guides)
         result_layout.addLayout(row)
-        row = QHBoxLayout()
+        result_layout.addStretch()
+        images.addWidget(result_panel,0,0)
+        self.selection_toolbar = QWidget()
+        row = QHBoxLayout(self.selection_toolbar)
+        row.setContentsMargins(0,0,0,0)
+        row.setSpacing(6)
         self.selection_buttons = {}
+        descriptions = {
+            "wand":"在左侧模板单击，添加颜色相近的连通区域；按原始模板取色，可重复点击添加。容差控制颜色范围，扩边按模板像素扩大选区；用橡皮修边，Ctrl+Z 撤销。",
+            "select":"在左侧模板按住左键拖出矩形，使用当前补充图修补框内区域。",
+            "polygon":"在左侧模板逐点单击，双击或 Enter 完成多边形；右键撤回顶点，Esc 取消。",
+            "brush":"在左侧模板按住左键涂抹，添加修补范围；圆形鼠标表示画笔直径，按模板像素计算。",
+            "eraser":"在左侧模板按住左键擦除当前补充图的修补范围；圆形鼠标表示橡皮直径，按模板像素计算。"}
         for mode,name in (("wand","魔术棒"),("select","矩形"),("polygon","多边形"),("brush","涂抹"),("eraser","橡皮")):
             button = self.button(name,lambda checked=False,m=mode:self.set_tool(m))
             button.setCheckable(True)
+            button.setToolTip(descriptions[mode])
             row.addWidget(button)
             self.selection_buttons[mode] = button
         self.select_tool = self.selection_buttons["select"]
-        self.selection_buttons["wand"].setToolTip("点击模板，添加颜色相近的连通区域；按原始模板取色。")
-        result_layout.addLayout(row)
-        row = QHBoxLayout()
         self.brush_controls = QWidget()
         brush_row = QHBoxLayout(self.brush_controls)
         brush_row.setContentsMargins(0,0,0,0)
@@ -403,12 +420,19 @@ class MainWindow(QMainWindow):
         self.wand_tolerance_spin.valueChanged.connect(lambda value:self.save_tool_setting("tools/wand_tolerance",value))
         self.wand_tolerance_spin.setToolTip("0 仅选相同颜色；数值越大，允许的颜色差异越大。调整后再次点击取选区。")
         wand_row.addWidget(self.wand_tolerance_spin)
+        wand_row.addWidget(self.label("扩边"))
+        self.wand_expand_spin = QSpinBox()
+        self.wand_expand_spin.setRange(0,500)
+        self.wand_expand_spin.setSuffix(" px")
+        self.wand_expand_spin.setValue(self.read_tool_setting("tools/wand_expand",0,0,500))
+        self.wand_expand_spin.valueChanged.connect(lambda value:self.save_tool_setting("tools/wand_expand",value))
+        self.wand_expand_spin.setToolTip("在颜色选区四周扩出指定的模板像素；0 不扩边。修改后下次点击生效，自动记忆设置。")
+        wand_row.addWidget(self.wand_expand_spin)
         row.addWidget(self.wand_controls)
-        self.tool_help = self.label("", "muted", True)
-        row.addWidget(self.tool_help,1)
-        result_layout.addLayout(row)
-        self.result_hint = self.label("先对齐补充图，再框选清晰区域。", "hint", True)
-        result_layout.addWidget(self.result_hint)
+        row.addStretch()
+        row.addWidget(self.color_tools)
+        row.addWidget(self.crop_tools)
+        images.addWidget(self.selection_toolbar,1,0,1,2)
         self.result_canvas = ImageCanvas()
         self.result_canvas.point_picked.connect(self.pick_target_point)
         self.result_canvas.rectangle_drawn.connect(self.add_template_rectangle)
@@ -416,12 +440,11 @@ class MainWindow(QMainWindow):
         self.result_canvas.wand_picked.connect(self.add_wand_selection)
         self.result_canvas.files_dropped.connect(self.drop_template)
         self.result_canvas.empty_text = "将模板图片拖到这里"
-        result_layout.addWidget(self.result_canvas, 1)
-        result_layout.addLayout(self.canvas_footer(self.result_canvas, "导出保持模板尺寸 · 不含选框线"))
-        self.splitter.addWidget(result_panel)
-        self.splitter.insertWidget(0,result_panel)
+        images.addWidget(self.result_canvas,2,0)
+        images.addLayout(self.canvas_footer(self.result_canvas, "导出保持模板尺寸 · 不含选框线"),3,0)
+        self.splitter.addWidget(self.image_workspace)
         self.splitter.addWidget(self.side_scroll)
-        self.splitter.setSizes([580,580,300])
+        self.splitter.setSizes([1160,300])
         root.addWidget(self.splitter, 1)
         self.status_label = QLabel("就绪 · 图片仅在本地处理")
         self.statusBar().addWidget(self.status_label, 1)
@@ -434,7 +457,9 @@ class MainWindow(QMainWindow):
 
     def canvas_footer(self, canvas, hint):
         row = QHBoxLayout()
-        row.addWidget(self.label(hint, "muted"), 1)
+        hint_label = ElidedLabel(hint)
+        hint_label.setObjectName("muted")
+        row.addWidget(hint_label, 1)
         row.addWidget(self.button("适应", canvas.fit_image))
         row.addWidget(self.button("1:1", canvas.actual_size))
         return row
@@ -796,8 +821,9 @@ class MainWindow(QMainWindow):
             return
         base = self.document.base
         tolerance = self.wand_tolerance_spin.value()
+        expansion = self.wand_expand_spin.value()
         self.start_task("正在选择颜色相近的连通区域…",
-                        lambda: Region.from_mask(magic_wand_mask(base,point,tolerance)),
+                        lambda: Region.from_mask(magic_wand_mask(base,point,tolerance,expansion)),
                         self.commit_template_region)
 
     def commit_template_region(self,region):
@@ -995,11 +1021,13 @@ class MainWindow(QMainWindow):
         self.nudge_tools.setVisible(source is not None and source.matrix is not None and not self.manual)
         is_crop = self.source_canvas.mode == "crop"
         self.crop_tools.setVisible(is_crop)
+        self.color_tools.setVisible(not is_crop)
         self.apply_crop_button.setEnabled(self.pending_crop is not None)
         can_select = source is not None and source.matrix is not None and not self.manual and not is_crop
         for mode,button in self.selection_buttons.items():
             button.setChecked(mode==self.selection_mode and can_select)
             button.setEnabled(can_select)
+        self.selection_toolbar.setToolTip(self.selection_buttons[self.selection_mode].toolTip())
         self.brush_controls.setVisible(self.selection_mode in ("brush","eraser"))
         self.brush_spin.setEnabled(can_select)
         size_mode = self.selection_mode if self.selection_mode in self.tool_sizes else "brush"
@@ -1010,10 +1038,7 @@ class MainWindow(QMainWindow):
         self.result_canvas.set_brush_size(self.tool_sizes[size_mode])
         self.wand_controls.setVisible(self.selection_mode=="wand")
         self.wand_tolerance_spin.setEnabled(can_select)
-        help_text = {"brush":"按住左键涂抹，添加修补范围。", "eraser":"按住左键擦除，减少修补范围。",
-                     "wand":"单击添加连通选区；容差越大，颜色范围越宽。",
-                     "polygon":"单击加点，双击或 Enter 完成。", "select":"按住左键拖出矩形。"}
-        self.tool_help.setText(help_text[self.selection_mode])
+        self.wand_expand_spin.setEnabled(can_select)
         self.crop_tool.setChecked(is_crop)
         self.result_canvas.set_mode("point" if self.manual else (self.selection_mode if can_select else "pan"))
         self.preview_combo.setEnabled(not self.manual)
@@ -1035,16 +1060,6 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(f"{'* ' if self.dirty else ''}{Path(self.project_path).name if self.project_path else document.base_name} — 图片互补")
         else:
             self.base_title.setText("请先打开模板")
-        if self.manual:
-            self.result_hint.setText("手动校准：在中间补充图点一下 → 左侧原模板对应位置点一下，重复后应用校准。")
-        elif source and source.matrix is None:
-            self.result_hint.setText("当前补充图尚未对齐；可先裁切，再自动对齐或手动校准。")
-        elif can_select and self.selection_mode=="wand":
-            self.result_hint.setText("魔术棒按原始模板取色：点击选中相近颜色的连通区域，可重复点击添加；用橡皮修边，Ctrl+Z 撤销。")
-        elif self.preview_combo.currentIndex() == 2:
-            self.result_hint.setText("对齐检查：当前补充图以 50% 透明度叠加；重影明显时请校准或微调。")
-        else:
-            self.result_hint.setText("在此模板上涂抹或圈选要修补的位置；中间补充图同步显示对应选区。")
         self.update_manual_info()
         self.show_result()
         if schedule and document:

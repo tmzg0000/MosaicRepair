@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 import numpy as np
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QEvent
-from PySide6.QtGui import QColor, QImage, QPixmap, QPen, QBrush, QPainter, QPolygonF, QPainterPath
+from PySide6.QtGui import QColor, QImage, QPixmap, QPen, QBrush, QPainter, QPolygonF, QPainterPath, QCursor
 from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsItem, QLabel, QSizePolicy
 
 
@@ -59,11 +59,36 @@ class ImageCanvas(QGraphicsView):
         self.auto_fit = True
         self.brush_size = 24
         self.hover_position = None
+        self.wand_cursor = self.make_wand_cursor()
         self.stroke = []
         self.polygon_points = []
         self.empty_text = "拖入图片，或使用顶部按钮打开"
         self.horizontalScrollBar().valueChanged.connect(self.update_brush_cursor)
         self.verticalScrollBar().valueChanged.connect(self.update_brush_cursor)
+
+    @staticmethod
+    def make_wand_cursor():
+        pixmap = QPixmap(32,32)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor("#17232d"),6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawLine(QPointF(10,10),QPointF(26,26))
+        pen.setColor(QColor("#ffffff"))
+        pen.setWidthF(3)
+        painter.setPen(pen)
+        painter.drawLine(QPointF(10,10),QPointF(26,26))
+        painter.setPen(QPen(QColor("#17232d"),1.2))
+        painter.setBrush(QColor("#ffe38a"))
+        painter.drawPolygon(QPolygonF([QPointF(x,y) for x,y in
+            ((7,1),(9,5),(13,7),(9,9),(7,13),(5,9),(1,7),(5,5))]))
+        painter.setPen(QPen(QColor("#17232d"),1.2))
+        painter.drawLine(QPointF(21,1),QPointF(21,7))
+        painter.drawLine(QPointF(18,4),QPointF(24,4))
+        painter.end()
+        return QCursor(pixmap,7,7)
 
     def set_brush_size(self, size):
         self.brush_size = size
@@ -84,6 +109,8 @@ class ImageCanvas(QGraphicsView):
             shape = Qt.CursorShape.ClosedHandCursor
         elif self.brush_cursor_rect() is not None:
             shape = Qt.CursorShape.BlankCursor
+        elif self.mode=="wand":
+            shape = self.wand_cursor
         elif self.mode in ("select","crop","point","brush","eraser","polygon","wand"):
             shape = Qt.CursorShape.CrossCursor
         else:

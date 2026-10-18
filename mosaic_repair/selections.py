@@ -24,8 +24,8 @@ def read_region_mask(region):
         raise RepairError("工程魔法棒选区数据无效。") from exc
 
 
-def magic_wand_mask(image, point, tolerance=32):
-    """Select four-connected visible pixels within RGB tolerance of the seed."""
+def magic_wand_mask(image, point, tolerance=32, expansion=0):
+    """Select a connected color region, then optionally expand in template pixels."""
     h, w = image.shape[:2]
     point = np.asarray(point, dtype=float)
     if (point.shape != (2,) or not np.isfinite(point).all()
@@ -33,6 +33,8 @@ def magic_wand_mask(image, point, tolerance=32):
         raise RepairError("请在模板图片内点击魔法棒选区。")
     if type(tolerance) is not int or not 0 <= tolerance <= 255:
         raise RepairError("魔法棒容差需在 0–255 之间。")
+    if type(expansion) is not int or not 0 <= expansion <= 500:
+        raise RepairError("魔术棒扩边需在 0–500 像素之间。")
     seed = (int(point[0]), int(point[1]))
     if image[seed[1], seed[0], 3] == 0:
         raise RepairError("点击处完全透明，请选择可见的模板区域。")
@@ -43,7 +45,17 @@ def magic_wand_mask(image, point, tolerance=32):
     delta = (tolerance,) * 3
     cv2.floodFill(np.ascontiguousarray(image[:, :, :3]), flood, seed, 0,
                  loDiff=delta, upDiff=delta, flags=flags)
-    return np.uint8(flood[1:-1, 1:-1] == 255) * 255
+    selection = np.uint8(flood[1:-1, 1:-1] == 255) * 255
+    if expansion:
+        # Restrict the distance calculation to the selected bounds plus the margin.
+        x,y,rw,rh = cv2.boundingRect(selection)
+        x0,y0 = max(0,x-expansion),max(0,y-expansion)
+        x1,y1 = min(w,x+rw+expansion),min(h,y+rh+expansion)
+        local = selection[y0:y1,x0:x1]
+        distance = cv2.distanceTransform(cv2.bitwise_not(local),cv2.DIST_L2,cv2.DIST_MASK_PRECISE)
+        local[:] = np.uint8(distance<=expansion) * 255
+        selection[image[:,:,3]==0] = 0
+    return selection
 
 
 def paint_region(mask,region,offset=(0,0)):
